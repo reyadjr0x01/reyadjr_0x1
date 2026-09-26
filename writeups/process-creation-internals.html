@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Process Creation Internals — Windows Memory Forensics // 0xREYAD</title>
+<meta name="description" content="Part 03 of a Windows memory forensics series: how a process actually comes into existence — EPROCESS, the PE header, the PEB, the VAD tree, and memory paging.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0b0e12;
+    --panel:#111620;
+    --paper:#e9e4d4;
+    --accent:#5b8fd9;
+    --accent-dim:#33507a;
+    --accent-2:#4f8a86;
+    --line: rgba(233,228,212,0.14);
+    --text: #cfd3d6;
+    --text-dim:#7c848c;
+    --mono: 'JetBrains Mono', monospace;
+    --head: 'Space Grotesk', sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:var(--mono);
+    line-height:1.7;
+  }
+  a{color:var(--accent); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+
+  header{
+    position:sticky; top:0; z-index:10;
+    background:rgba(11,14,18,0.92);
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);
+  }
+  .bar{
+    max-width:860px; margin:0 auto; padding:16px 24px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand{font-family:var(--head); font-weight:700; font-size:15px; color:var(--paper); letter-spacing:.02em; position:relative;}
+  .brand span{color:var(--accent);}
+  .brand::after{ content:'_'; color:var(--accent); margin-left:2px; animation:blink 1.1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0;} }
+  .back{font-size:13px; color:var(--text-dim); position:relative; padding-bottom:4px;}
+  .back::after{ content:''; position:absolute; left:0; bottom:-2px; width:0; height:1px; background:var(--accent); box-shadow:0 0 6px var(--accent); transition:width .25s ease; }
+  .back:hover{color:var(--accent); text-decoration:none;}
+  .back:hover::after{ width:100%; }
+
+  main{max-width:1005px; margin:0 auto; padding:56px 24px 96px; position:relative; z-index:1;}
+
+  .kicker{
+    font-size:12px; color:var(--accent-2); letter-spacing:.06em;
+    display:flex; gap:10px; align-items:center; margin-bottom:18px;
+  }
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--accent-2); box-shadow:0 0 8px var(--accent-2);}
+
+  h1{
+    font-family:var(--head); font-weight:700; color:var(--paper);
+    font-size:clamp(28px,4.2vw,40px); line-height:1.2; margin-bottom:14px;
+  }
+  .dek{color:var(--text-dim); font-size:16px; max-width:62ch; margin-bottom:28px;}
+
+  .meta{
+    display:flex; flex-wrap:wrap; gap:18px; font-size:12.5px; color:var(--text-dim);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    padding:14px 0; margin-bottom:40px;
+  }
+  .meta b{color:var(--text); font-weight:500;}
+
+  article h2{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:22px; margin:48px 0 14px; padding-top:6px;
+    border-top:1px solid var(--line);
+    transition:border-color .3s ease;
+  }
+  article h2:hover{ border-color:var(--accent-dim); }
+  article h2 .num{color:var(--accent); margin-right:10px; font-family:var(--mono); font-size:15px;}
+  article h3{
+    font-family:var(--head); font-weight:600; color:var(--text);
+    font-size:16px; margin:26px 0 10px;
+  }
+  article h4{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:14.5px; margin:20px 0 8px;
+  }
+  article p{margin-bottom:14px; max-width:72ch; color:var(--text);}
+  article p.lede{color:var(--paper); font-size:17px;}
+  article ul, article ol{margin:0 0 16px 22px; max-width:70ch;}
+  article li{margin-bottom:6px;}
+  article strong{color:var(--paper); font-weight:600;}
+
+  .callout{
+    background:var(--panel); border-left:2px solid var(--accent);
+    padding:14px 18px; margin:20px 0; font-size:14.5px; color:var(--text);
+    transition:box-shadow .3s ease;
+  }
+  .callout:hover{ box-shadow:0 0 24px -8px rgba(91,143,217,.4); }
+
+  pre{
+    background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:16px 18px; overflow-x:auto; font-size:13px; color:var(--paper);
+    margin:16px 0 22px; line-height:1.55;
+  }
+  code{font-family:var(--mono); font-size:0.92em;}
+  p code, li code, h4 code{background:var(--panel); padding:1px 6px; border-radius:3px; color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:18px 0 24px;}
+  .table-wrap table{margin:0;}
+  th, td{border:1px solid var(--line); padding:9px 12px; text-align:left;}
+  th{color:var(--paper); font-family:var(--head); font-weight:600; background:var(--panel);}
+  td{color:var(--text);}
+  table code{color:var(--accent);}
+
+  .step-box{ border:1px solid var(--line); border-radius:4px; padding:16px 20px; margin:16px 0; }
+  .step-box h3{ margin-top:0; }
+
+  .img-frame{ margin:22px 0 28px; }
+  .img-frame .img-card{ background:#eee9da; border:1px solid var(--line); border-radius:8px; padding:22px; overflow-x:auto; display:flex; justify-content:center; }
+  .img-frame img{ max-width:100%; height:auto; display:block; }
+  .img-frame figcaption{ margin-top:9px; font-size:12.5px; color:var(--text-dim); }
+
+  .series-nav{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; font-size:13.5px;}
+  .series-nav a{color:var(--text-dim);}
+  .series-nav a:hover{color:var(--accent);}
+
+  footer{border-top:1px solid var(--line); padding:28px 24px; text-align:center; font-size:12px; color:var(--text-dim); position:relative; z-index:1;}
+
+  /* ambient life: drifting glow, moving grid */
+  .bg-fx{ position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  .bg-fx .grid{ position:absolute; inset:0; background-image:linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size:46px 46px; opacity:.4; -webkit-mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); }
+  .bg-fx .orb{ position:absolute; border-radius:50%; filter:blur(80px); }
+  .bg-fx .o1{ width:420px; height:420px; background:var(--accent); opacity:.24; top:-140px; left:-100px; animation:drift1 22s ease-in-out infinite; }
+  .bg-fx .o2{ width:360px; height:360px; background:var(--accent-2); opacity:.2; bottom:-160px; right:-100px; animation:drift2 27s ease-in-out infinite; }
+  .bg-fx .o3{ width:280px; height:280px; background:var(--accent-dim); opacity:.18; top:35%; left:55%; animation:drift1 19s ease-in-out infinite reverse; }
+  .bg-fx .scan{ position:absolute; left:0; right:0; top:-160px; height:160px; background:linear-gradient(to bottom, transparent, rgba(91,143,217,0.06), transparent); animation:scanmove 10s linear infinite; }
+  @keyframes drift1{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(70px,45px) scale(1.15);} }
+  @keyframes drift2{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(-55px,-35px) scale(1.12);} }
+  @keyframes scanmove{ 0%{ transform:translateY(0);} 100%{ transform:translateY(calc(100vh + 160px));} }
+
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto;}
+    .bg-fx .orb, .bg-fx .scan, .brand::after{ animation:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <div class="brand">0x<span>REYAD</span></div>
+    <a class="back" href="/writeups.html">&larr; All writeups</a>
+  </div>
+</header>
+
+<main>
+  <div class="kicker"><span class="dot"></span>WINDOWS MEMORY FORENSICS — PART 03</div>
+  <h1>Process creation internals: from double-click to first instruction</h1>
+  <p class="dek">Parts 01 and 02 covered how to find processes and validate what's loaded inside them. This part goes one level deeper: how a process actually comes into existence in the first place — from the double-click to the first executed instruction.</p>
+
+  <div class="meta">
+    <span><b>Series</b> — Windows Memory Forensics, Part 03</span>
+    <span><b>Topic</b> — EPROCESS, PE Header, PEB, VAD Tree, Paging</span>
+    <span><b>Read</b> — ~11 min</span>
+  </div>
+
+  <article>
+    <p class="lede">Understanding the creation flow in detail is what makes the forensic artifacts in Parts 01 and 02 make sense: why <code>EPROCESS</code> looks the way it does, why the <code>PEB</code> exists at all, and how the PE loading process, the VAD Tree, and memory paging all fit together.</p>
+
+    <h2><span class="num">01</span>What happens when you double-click notepad.exe</h2>
+
+    <div class="step-box">
+      <h3>Step 1: Request execution (user mode)</h3>
+      <p>You double-click the file. The shell (e.g. <code>explorer.exe</code>) calls a function named <code>CreateProcess</code>.</p>
+    </div>
+
+    <div class="step-box">
+      <h3>Step 2: Create the EPROCESS (kernel mode)</h3>
+      <p>The request drops into the kernel, which builds a data structure in its own memory called <code>EPROCESS</code>.</p>
+      <div class="callout"><strong>Purpose:</strong> this is the process's official record — it holds the Process ID (PID), the security structure (Access Token), and which process is the parent.</div>
+    </div>
+
+    <div class="step-box">
+      <h3>Step 3: Allocate the virtual address space</h3>
+      <p>Windows builds a virtual address space for the process (e.g. 4GB on a 32-bit system, or a vastly larger space on 64-bit).</p>
+      <div class="callout"><strong>Purpose:</strong> give the process an empty address space, completely independent from every other process — without reserving any <em>physical</em> RAM yet.</div>
+    </div>
+
+    <div class="step-box">
+      <h3>Step 4: Read the PE header and map the sections</h3>
+      <p>Windows opens the <code>.exe</code> file on disk and reads its structure (the <strong>PE Header</strong>).</p>
+    </div>
+
+    <div class="step-box">
+      <h3>Step 5: Resolve imports</h3>
+      <p>Windows inspects the Imports section and loads the required DLLs (e.g. <code>kernel32.dll</code>), writing the real function addresses into a table called the <strong>IAT</strong> (Import Address Table).</p>
+    </div>
+
+    <div class="step-box">
+      <h3>Step 6: Create the primary thread and start execution</h3>
+      <p>Windows creates an <code>ETHREAD</code> and sets up the CPU to begin executing code at the address written in <code>AddressOfEntryPoint</code>.</p>
+    </div>
+
+    <h2><span class="num">02</span>What is EPROCESS, exactly?</h2>
+    <p><strong>EPROCESS</strong> is a <strong>kernel data structure</strong> in Windows representing a process from the <strong>kernel's</strong> point of view.</p>
+    <p>So when Windows creates a process such as:</p>
+    <pre>notepad.exe
+PID = 4200</pre>
+    <p>the kernel holds an object/structure roughly called:</p>
+    <pre>EPROCESS</pre>
+    <p>representing that process and holding the information Windows needs to manage it.</p>
+
+    <h3>2.1 EPROCESS — the full picture</h3>
+    <pre>EPROCESS
+│
+├── Object / Kernel Management
+│   ├── Process Object Header
+│   ├── Object information
+│   └── Reference / handle-related information
+│
+├── Process Identity
+│   ├── UniqueProcessId
+│   ├── Image/File information
+│   ├── Process flags
+│   └── Process state
+│
+├── Process Relationships
+│   ├── ActiveProcessLinks
+│   ├── Parent Process
+│   ├── Session information
+│   └── Job information
+│
+├── Security
+│   ├── Token
+│   ├── Security context
+│   └── Privilege-related information
+│
+├── Execution
+│   ├── Threads
+│   ├── Thread list
+│   ├── Scheduling information
+│   └── Process state
+│
+├── Memory Management
+│   ├── Process Address Space
+│   ├── Directory Table Base
+│   ├── VAD information
+│   ├── Working Set information
+│   └── Memory-management structures
+│
+├── Handles / Objects
+│   ├── Handle table
+│   └── Object-related information
+│
+├── I/O
+│   ├── I/O-related information
+│   └── Device / file interaction state
+│
+├── Loader / Image Information
+│   ├── Image file information
+│   ├── Section information
+│   └── Image-related metadata
+│
+└── Accounting / Statistics
+    ├── CPU time
+    ├── Memory usage
+    ├── Quotas
+    └── Other accounting information</pre>
+    <p><code>EPROCESS</code> structures are <strong>not isolated from each other</strong>. Windows links them together in a <strong>linked list</strong> inside the kernel, so it can walk from one process to the next — this is the same list <code>pslist</code> (Part 01) traverses.</p>
+
+    <h3>2.2 The idea, simplified</h3>
+    <p>Imagine three processes:</p>
+    <pre>explorer.exe   PID 1000
+notepad.exe    PID 2000
+chrome.exe     PID 3000</pre>
+    <p>Windows can keep them connected like this:</p>
+    <pre>EPROCESS              EPROCESS              EPROCESS
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│ explorer    │       │ notepad     │       │ chrome      │
+│ PID 1000    │       │ PID 2000    │       │ PID 3000    │
+│             │       │             │       │             │
+│ ActiveLinks │──────►│ ActiveLinks │──────►│ ActiveLinks │
+└─────────────┘       └─────────────┘       └─────────────┘
+       ▲                                          │
+       └──────────────────────────────────────────┘</pre>
+    <p>But in reality Windows uses a <strong>doubly linked list</strong> — every node has both:</p>
+    <pre>Flink
+Blink</pre>
+
+    <h3>2.3 Flink and Blink</h3>
+    <pre>EPROCESS A
+    │
+    ├── Flink ──────► EPROCESS B
+    │
+    └── Blink ◄───── EPROCESS previous</pre>
+    <p>So every process can find:</p>
+    <ul>
+      <li>what comes after it, via <code>Flink</code></li>
+      <li>what comes before it, via <code>Blink</code></li>
+    </ul>
+    <pre>Flink
+A ─────────────────► B
+▲                    │
+│                    │ Flink
+│                    ▼
+└──────────────────── C</pre>
+
+    <h3>2.4 Which field connects them?</h3>
+    <p>In modern Windows, <code>EPROCESS</code> contains a field called:</p>
+    <pre>ActiveProcessLinks</pre>
+    <p>of type:</p>
+    <pre>LIST_ENTRY</pre>
+    <p>and <code>LIST_ENTRY</code> itself is:</p>
+    <pre>typedef struct _LIST_ENTRY {
+    struct _LIST_ENTRY *Flink;
+    struct _LIST_ENTRY *Blink;
+} LIST_ENTRY;</pre>
+    <p>So conceptually:</p>
+    <pre>EPROCESS
+│
+├── UniqueProcessId
+│
+├── Token
+│
+├── ...
+│
+└── ActiveProcessLinks
+       ├── Flink
+       └── Blink</pre>
+    <p><code>ActiveProcessLinks</code> is exactly what places an <code>EPROCESS</code> into the <strong>Active Process List</strong>.</p>
+
+    <h3>2.5 Where does the kernel start?</h3>
+    <p>There is a <strong>head</strong> for the list, from which Windows begins its traversal:</p>
+    <pre>PsActiveProcessHead
+        │
+        ▼
+   EPROCESS A
+        │
+      Flink
+        ▼
+   EPROCESS B
+        │
+      Flink
+        ▼
+   EPROCESS C
+        │
+      Flink
+        ▼
+ PsActiveProcessHead</pre>
+    <p>In other words:</p>
+    <pre>PsActiveProcessHead
+        ↓
+    explorer
+        ↓
+    notepad
+        ↓
+    chrome
+        ↓
+      ...</pre>
+    <p>This is fundamental to understanding how <code>pslist</code> works (see Part 01).</p>
+
+    <h2><span class="num">03</span>What is the PE header?</h2>
+    <p>Think of the PE Header as the program's "ID card" or "specification sheet." The moment you double-click an <code>.exe</code>, the OS reads this card to understand the file's dimensions, where to place it in RAM, and how to run it.</p>
+
+    <figure class="img-frame">
+      <div class="img-card"><img src="/writeups/assets/pe101.svg" alt="PE file format diagram: DOS header, NT headers, section table and section data laid out on disk"></div>
+      <figcaption>The PE file layout on disk — DOS Header → NT Headers → Section Table → the raw section data itself.</figcaption>
+    </figure>
+
+    <h3>3.1 The DOS header</h3>
+    <p>The first data structure encountered at the very start of any Windows executable (<code>.exe</code> or <code>.dll</code>).</p>
+    <ul>
+      <li>Fixed size: 64 bytes (<code>0x40</code>)</li>
+      <li>Located at offset <code>0x00</code></li>
+      <li>Contains many legacy fields (used by old MS-DOS systems), but modern Windows only cares about two of them</li>
+    </ul>
+    <p><strong>1. The Magic Signature:</strong> <code>e_magic</code></p>
+    <ul>
+      <li>Location: the very start of the file, offset <code>0x00</code></li>
+      <li>Value: always <code>0x5A4D</code> in hex, equal to the characters <code>MZ</code> (named after programmer Mark Zbikowski, who designed the format)</li>
+      <li>Purpose: Windows reads these two characters to confirm the file is actually a valid Windows executable; without <code>MZ</code>, the system refuses to run it</li>
+    </ul>
+    <p><strong>2. The Golden Pointer:</strong> <code>e_lfanew</code></p>
+    <ul>
+      <li>Location: at the end of the DOS Header, offset <code>0x3C</code></li>
+      <li>Purpose: holds a number (address/offset) pointing directly to the start of the real PE Header (the NT Headers) inside the file</li>
+      <li>Why it matters: without this pointer, Windows wouldn't know exactly where the PE Header begins, since the space between the DOS Header and the PE Header can vary in size from file to file</li>
+    </ul>
+
+    <h3>3.2 The NT headers (the beating heart)</h3>
+    <p>The most important structure, containing 3 parts:</p>
+    <ul>
+      <li><strong>Signature</strong> — the PE-specific signature, the characters <code>PE\0\0</code></li>
+      <li><strong>File Header</strong> — basic information about the file itself: processor architecture (32-bit or 64-bit?), number of sections inside the file, file creation date/time</li>
+      <li><strong>Optional Header</strong> — despite the name "optional," it's mandatory in <code>.exe</code> files:
+        <ul>
+          <li><code>AddressOfEntryPoint</code> — the address where the processor begins executing code</li>
+          <li><code>ImageBase</code> — the preferred address where the file wants to be loaded in memory</li>
+          <li><code>SizeOfImage</code> — the total size the file occupies once unfolded in memory</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>3.3 The section table</h3>
+    <p>Works like a conversion map that tells Windows how to take the data written in the file on disk and place it correctly in memory (RAM). Think of the Section Table as containing a "data form" for each section (like <code>.text</code> or <code>.data</code>), with 4 key parameters:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Parameter</th><th>Technical Name</th><th>Simple Function</th></tr>
+      <tr><td>Location on disk</td><td><code>PointerToRawData</code></td><td>Where the section starts inside the <code>.exe</code> file on disk</td></tr>
+      <tr><td>Size on disk</td><td><code>SizeOfRawData</code></td><td>The real size of the section's data on disk</td></tr>
+      <tr><td>Location in memory</td><td><code>VirtualAddress</code> (RVA)</td><td>The address the section will land at in memory (relative to the program's base address)</td></tr>
+      <tr><td>Size in memory</td><td><code>VirtualSize</code></td><td>The size the section will occupy in virtual memory</td></tr>
+    </table>
+    </div>
+
+    <h3>3.4 How Windows maps a section like .text into memory</h3>
+    <p>Let's apply the formula to a practical example:</p>
+    <ol>
+      <li><strong>Program base address (ImageBase):</strong> suppose Windows decides to load the program at address <code>0x400000</code> in memory</li>
+      <li><strong>Reading section data from the table:</strong> Windows looks at the Section Table row for <code>.text</code> and finds <code>VirtualAddress = 0x1000</code> and <code>PointerToRawData = 0x400</code></li>
+      <li><strong>The mapping process:</strong> Windows goes to the disk at location <code>0x400</code> and reads the instruction code, then calculates its final location in memory with a simple addition — as a result, Windows moves the code and places it at address <code>0x401000</code> in memory</li>
+    </ol>
+
+    <h3>3.5 Security permissions (characteristics)</h3>
+    <p>The Section Table doesn't just define addresses — it also gives each section specific access permissions:</p>
+    <ul>
+      <li><code>.text</code> <strong>section:</strong> gets Execute/Read permission (execute and read only), so the processor can execute the code, and no program can modify it</li>
+      <li><code>.data</code> <strong>section:</strong> gets Read/Write permission, used to store variables</li>
+    </ul>
+
+    <h3>3.6 The five loading stages</h3>
+    <p><strong>1. Headers Parsing</strong> — the OS opens the file and reads the main parts in order: DOS Header → PE Header → Optional Header. Goal: confirm the file is valid and intended for Windows, and learn the basic instructions for its size and location.</p>
+    <p><strong>2. Sections Table Parsing</strong> — the system reads the Section Table to verify its validity and boundaries. Goal: identify the sections present (like <code>.text</code> and <code>.data</code>) and how much space and what permissions each needs.</p>
+    <p><strong>3. Mapping</strong> — Windows builds the virtual address space and starts moving each section from disk into its appropriate address in memory, based on <code>ImageBase</code> and <code>VirtualAddress</code>. Goal: unfold the file's parts inside RAM in an organized way.</p>
+    <p><strong>4. Imports Resolution</strong> — Windows looks at the Imports section (e.g. <code>kernel32.dll</code> or <code>user32.dll</code>), loads these libraries into memory, and writes the real function addresses into a table called the <strong>IAT</strong> (Import Address Table). Goal: connect the program to the helper functions it needs from the system.</p>
+    <p><strong>5. Execution</strong> — the CPU jumps directly to the address written in <code>AddressOfEntryPoint</code> and executes the first instruction there. Result: the program starts running and its window appears.</p>
+
+    <h2><span class="num">04</span>The PEB (Process Environment Block)</h2>
+    <p>PEB stands for Process Environment Block — a data structure representing a process's information in <strong>User Mode</strong>. Windows creates this structure for every running process so it can hold that process's runtime information without constantly having to go back into Kernel Mode.</p>
+
+    <h3>4.1 Key elements of the PEB structure</h3>
+    <p><strong>1.</strong> <code>BeingDebugged</code> — a one-byte field. Its value is <code>1</code> if the process is being traced by a debugger, and <code>0</code> if running normally. Attackers and malware check this field to apply Anti-Debugging techniques.</p>
+    <p><strong>2.</strong> <code>Ldr</code> — <code>PEB_LDR_DATA</code> — a pointer to a structure containing a list of all modules and external DLLs loaded into the process. This list is a doubly linked list showing DLL addresses and their location in memory.</p>
+    <p><strong>3.</strong> <code>ProcessParameters</code> — <code>RTL_USER_PROCESS_PARAMETERS</code> — a structure holding the process's startup parameters, such as executable file path, command line, current directory, and environment variables.</p>
+    <p><strong>4.</strong> <code>ProcessHeap</code> — a pointer to the process's main heap, used for dynamic memory allocation.</p>
+    <p><strong>5.</strong> <code>ImageBaseAddress</code> — a pointer to the address where the main <code>.exe</code> file is loaded within the process's virtual memory.</p>
+
+    <h3>4.2 _EPROCESS is not a direct "container" of the PEB</h3>
+    <p>The <code>_EPROCESS</code> object in the kernel does not contain the full PEB structure inside it — it only contains a <strong>pointer</strong> to the PEB's address in User Space:</p>
+    <ul>
+      <li>In <strong>Kernel Space</strong>: the <code>_EPROCESS</code> structure contains a field called <code>Peb</code>, of type pointer (<code>struct _PEB*</code>)</li>
+      <li>In <strong>User Space</strong>: the actual memory where the PEB structure is built</li>
+    </ul>
+
+    <h2><span class="num">05</span>The VAD tree (Virtual Address Descriptor tree) — in depth</h2>
+    <p>The VAD Tree is the fundamental data structure the kernel in Windows uses to track and count every memory region reserved inside a process's Virtual Address Space.</p>
+    <p>Imagine the process's Virtual Address Space is a huge piece of land. When the process wants to reserve a plot (carve out memory for Code, Stack, or Heap), the OS builds a land registry recording where the plot starts and ends, address-wise, and what permissions it has (Read-Only, Write, or Execute). That land registry, at the kernel level, is the VAD Tree.</p>
+
+    <figure class="img-frame">
+      <div class="img-card"><img src="/writeups/assets/vad-tree-example.png" alt="Example VAD tree with StartVPN/EndVPN, Commit, allocation type, and protection for each node across three levels"></div>
+      <figcaption>A real VAD tree: each node records its address range, commit charge, whether it's Private or Mapped, and its protection (READWRITE, READONLY, EXE_WRITE_COPY...).</figcaption>
+    </figure>
+
+    <h3>5.1 Key data stored in each tree node</h3>
+    <p>Each node inside the VAD tree represents a reserved memory region and contains:</p>
+    <p><strong>1. Addresses (Starting &amp; Ending VPN)</strong> — defines the start and end virtual memory address of the region reserved.</p>
+    <p><strong>2. Allocation Type</strong> — indicates whether the space is <strong>Private Memory</strong> (memory private to this process only, like the Heap and Stack) or a <strong>Mapped File / Section</strong> (memory tied to a file on disk, like an <code>.exe</code> file or DLL files).</p>
+    <p><strong>3. Protection Flags</strong> — define what's permitted on this region, such as <code>PAGE_READONLY</code>, <code>PAGE_READWRITE</code>, or <code>PAGE_EXECUTE_READWRITE</code> (a very dangerous permission, because it allows writing and executing code in the same region at the same time).</p>
+
+    <h2><span class="num">06</span>What is a page, simply put?</h2>
+    <p>Windows and the CPU don't treat RAM as a random sea of bytes, and they don't reserve memory byte-by-byte. Instead, they divide both virtual and physical memory into small, fixed-size blocks.</p>
+    <ul>
+      <li>The standard size of a single Page on most systems is <strong>4 Kilobytes</strong> (4096 bytes)</li>
+      <li>The Page is the smallest building-block unit the CPU and OS can reserve, move, or apply security permissions to (Read, Write, Execute)</li>
+    </ul>
+
+    <h3>6.1 Analogy: being inside the RAM giant</h3>
+    <p>Imagine RAM as a giant notebook:</p>
+    <p><strong>The Page (a page in the notebook):</strong> one sheet of the notebook (fixed size, 4KB). You can't tear off half a sheet and write on it — you either use the whole sheet or leave it empty.</p>
+    <p><strong>The PTE (Page Table Entry):</strong> the index tag glued to the top of that sheet. This tag says: "Where is this sheet actually located in real RAM? And is it allowed to be written to, or read-only?"</p>
+
+    <figure class="img-frame">
+      <div class="img-card"><img src="/writeups/assets/ram-paging-example.png" alt="A process's virtual address space (EXE, kernel32.dll, Heap, Stack) split into 4KB pages, each pointing through a PTE to a physical RAM frame"></div>
+      <figcaption>Virtual pages from EXE, a DLL, the heap and the stack, each translated by its own PTE to a physical frame in RAM — frames don't need to be contiguous or in any particular order.</figcaption>
+    </figure>
+
+    <h3>6.2 The complete architecture with the VAD tree</h3>
+    <p>To tie the whole picture together so it never gets confusing again:</p>
+    <ol>
+      <li><strong>The VAD Node (tree node):</strong> represents a large space (e.g. a program requests 1 Megabyte). That space contains 256 pages.</li>
+      <li><strong>The Pages:</strong> that 1 Megabyte gets split into 256 small chunks, each 4KB.</li>
+      <li><strong>The PTE table (the tags):</strong> contains 256 entries (PTEs), each entry holding one page and responsible for translating its address and monitoring its current permissions in front of the CPU.</li>
+    </ol>
+
+    <h2><span class="num">07</span>Memory management mechanics</h2>
+    <p>Imagine you want to reserve a table at a big restaurant:</p>
+
+    <h3>7.1 Step one: initial reservation (MEM_RESERVE)</h3>
+    <p><strong>What happens?</strong> You call the restaurant and say: "I want to reserve a table for 10 people at 8." <strong>What does the restaurant do?</strong> It puts your name in the book: "Table 5 is reserved for so-and-so."</p>
+    <p><strong>In memory:</strong> Windows records in the VAD Tree that this address range (e.g. from <code>0x1000</code> to <code>0x5000</code>) is reserved for your program. <strong>The reality:</strong> no food is put on the table, and no space was actually pulled from real RAM — just "a name on paper."</p>
+
+    <h3>7.2 Step two: commitment (MEM_COMMITTED)</h3>
+    <p><strong>What happens?</strong> You confirm with the restaurant and say: "Prepare the order and the cost, we're on our way." <strong>What does the restaurant do?</strong> It ensures it has enough food in the kitchen for 10 people, but hasn't plated the food yet!</p>
+    <p><strong>In memory:</strong> Windows checks RAM and the Page File and guarantees there's enough free space for this page if you decide to use it, and sets the permissions (like Read/Write). <strong>The reality:</strong> real RAM still hasn't had anything placed into it!</p>
+
+    <h3>7.3 Step three: actual access (page fault, then demand paging)</h3>
+    <p><strong>What happens?</strong> The moment the guest sits down and reaches out to eat (i.e., the program tries to read or write to memory for the first time):</p>
+    <ul>
+      <li><strong>The CPU:</strong> checks the PTE table and finds the page empty, with no code actually backed by real RAM!</li>
+      <li><strong>Reaction:</strong> the CPU raises an alarm called a <strong>Page Fault</strong>.</li>
+      <li><strong>The Kernel steps in:</strong> the kernel hears the alarm, goes and opens RAM, grabs a real free physical frame, links it to that address, and updates the PTE to make it valid (<code>Valid = 1</code>).</li>
+      <li><strong>From this moment on:</strong> the data is actually inside RAM and you can use it directly!</li>
+    </ul>
+
+    <h2><span class="num">08</span>Why this matters for the investigation</h2>
+    <p>Everything explained in this part maps directly onto the forensic artifacts covered in Parts 01 and 02:</p>
+    <ul>
+      <li>The <code>EPROCESS</code>/<code>ActiveProcessLinks</code> walk is exactly what <code>pslist</code> traverses, and exactly what DKOM manipulates</li>
+      <li>The PEB's <code>ImageBaseAddress</code> field is exactly the value <code>ldrmodules</code> compares against the VAD</li>
+      <li>The VAD Tree's <code>Protection</code> and <code>Type</code> fields are exactly what <code>malfind</code> and <code>ldrmodules</code> inspect to flag suspicious memory regions</li>
+    </ul>
+
+    <div class="series-nav">
+      <a href="/writeups/ldrmodules-dll-injection.html">&larr; Part 02 — DLL injection &amp; ldrmodules</a>
+      <a href="/writeups.html">All writeups →</a>
+    </div>
+  </article>
+</main>
+
+<footer>© 2026 Ahmed Mohamed Reyad — All rights reserved</footer>
+
+<script>
+(function(){
+  var fx = document.createElement('div');
+  fx.className = 'bg-fx';
+  fx.innerHTML = '<div class="grid"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><div class="scan"></div>';
+  document.body.insertBefore(fx, document.body.firstChild);
+})();
+</script>
+</body>
+</html>
