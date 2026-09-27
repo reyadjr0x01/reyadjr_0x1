@@ -108,7 +108,9 @@
 
   .cmd::before{content:"$ "; color:var(--accent-2);}
 
-  table{width:100%; border-collapse:collapse; margin:18px 0 24px; font-size:13.5px;}
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:18px 0 24px;}
+  .table-wrap table{margin:0;}
   th, td{border:1px solid var(--line); padding:9px 12px; text-align:left;}
   th{color:var(--paper); font-family:var(--head); font-weight:600; background:var(--panel);}
   td{color:var(--text);}
@@ -118,6 +120,10 @@
   .widget-frame.tall iframe{aspect-ratio:auto; height:777px;}
   .widget-frame:hover iframe{ border-color:var(--accent-dim); box-shadow:0 0 30px -12px rgba(91,143,217,.4); }
   .widget-frame figcaption{margin-top:9px; font-size:12.5px; color:var(--text-dim);}
+  @media (max-width:640px){
+    .widget-frame iframe{ aspect-ratio:4/3; }
+    .widget-frame.tall iframe{ height:620px; }
+  }
 
   .refs{margin-top:56px; padding-top:22px; border-top:1px solid var(--line);}
   .refs h2{border-top:none; margin-top:0;}
@@ -128,6 +134,24 @@
   .series-nav{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; font-size:13.5px;}
   .series-nav a{color:var(--text-dim);}
   .series-nav a:hover{color:var(--accent);}
+
+  .like-widget{ margin:0 0 40px; padding:18px 20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  .like-btn{ display:inline-flex; align-items:center; gap:8px; background:transparent; border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13.5px; padding:9px 16px; border-radius:999px; cursor:pointer; transition:.2s ease; }
+  .like-btn:hover{ border-color:var(--accent-dim); color:var(--paper); }
+  .like-btn.liked{ border-color:var(--accent); color:var(--accent); background:rgba(91,143,217,.08); }
+  .like-btn:disabled{ cursor:default; }
+  .like-btn .heart{ font-size:15px; }
+  .like-count{ color:var(--accent-2); font-weight:600; }
+  .like-names{ margin-top:10px; font-size:12.5px; color:var(--text-dim); min-height:1em; }
+  .like-form{ display:none; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+  .like-widget.composing .like-form{ display:flex; }
+  .like-form input{ background:var(--ink); border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13px; padding:8px 12px; border-radius:6px; flex:1; min-width:160px; }
+  .like-form input:focus{ outline:none; border-color:var(--accent-dim); }
+  .like-form button[type="submit"]{ background:var(--accent); color:var(--ink); border:none; border-radius:6px; padding:8px 16px; font-family:var(--mono); font-size:13px; font-weight:700; cursor:pointer; }
+  .like-form button[type="submit"]:hover{ opacity:.9; }
+  .like-form button[type="submit"]:disabled{ opacity:.6; cursor:default; }
+  .like-cancel{ background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:6px; padding:8px 12px; font-family:var(--mono); font-size:13px; cursor:pointer; }
+  .like-cancel:hover{ color:var(--text); }
 
   footer{border-top:1px solid var(--line); padding:28px 24px; text-align:center; font-size:12px; color:var(--text-dim); position:relative; z-index:1;}
 
@@ -168,6 +192,20 @@
     <span><b>Topic</b> — Volatility, _EPROCESS, DKOM</span>
     <span><b>Read</b> — ~14 min</span>
   </div>
+
+    <div class="like-widget" data-page="pslist-psscan">
+      <button class="like-btn" id="likeBtn" type="button" aria-pressed="false">
+        <span class="heart">♡</span>
+        <span class="like-label">Like</span>
+        <span class="like-count" id="likeCount">0</span>
+      </button>
+      <div class="like-names" id="likeNames"></div>
+      <form class="like-form" id="likeForm" hidden>
+        <input type="text" id="likeNameInput" placeholder="Your name" maxlength="40" required>
+        <button type="submit">Send</button>
+        <button type="button" class="like-cancel" id="likeCancel">Cancel</button>
+      </form>
+    </div>
 
   <article>
     <p class="lede">When analyzing a Windows memory image with Volatility, one of the first questions we usually ask is: what processes were present on the system? At first that sounds simple — run <code>pslist</code>, get a list, start investigating. But memory forensics gets interesting once we ask a harder question: how does Volatility actually know that a process exists?</p>
@@ -246,6 +284,7 @@ but is no longer linked into the active process list.</pre>
     </ul>
 
     <h2><span class="num">06</span>pslist vs psscan</h2>
+    <div class="table-wrap">
     <table>
       <tr><th></th><th>pslist</th><th>psscan</th></tr>
       <tr><td>Main technique</td><td>Active process list traversal</td><td>Memory-based process-object scanning</td></tr>
@@ -257,6 +296,7 @@ but is no longer linked into the active process list.</pre>
       <tr><td>Can return stale objects</td><td>Less likely</td><td>Possible</td></tr>
       <tr><td>Main purpose</td><td>Enumerate processes exposed by the active list</td><td>Discover process objects from memory</td></tr>
     </table>
+    </div>
     <p>Neither plugin is "better" — they provide different views of the same memory image. <code>pslist</code> asks what's reachable through the active list; <code>psscan</code> asks what process objects can be discovered independently of it.</p>
 
     <h2><span class="num">07</span>The most important forensic scenario</h2>
@@ -318,6 +358,100 @@ but is no longer linked into the active process list.</pre>
   fx.className = 'bg-fx';
   fx.innerHTML = '<div class="grid"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><div class="scan"></div>';
   document.body.insertBefore(fx, document.body.firstChild);
+})();
+
+(function(){
+  var API = '/api/likes';
+  var widget = document.querySelector('.like-widget');
+  if(!widget) return;
+  var pageSlug = widget.dataset.page;
+  var btn = document.getElementById('likeBtn');
+  var countEl = document.getElementById('likeCount');
+  var namesEl = document.getElementById('likeNames');
+  var form = document.getElementById('likeForm');
+  var nameInput = document.getElementById('likeNameInput');
+  var cancelBtn = document.getElementById('likeCancel');
+
+  function getVisitorId(){
+    var id = localStorage.getItem('0xreyad_visitor_id');
+    if(!id){
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('v-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      localStorage.setItem('0xreyad_visitor_id', id);
+    }
+    return id;
+  }
+
+  function likedKey(){ return '0xreyad_liked_' + pageSlug; }
+
+  function renderNames(names){
+    if(!names || !names.length){ namesEl.textContent = ''; return; }
+    var shown = names.slice(-6).reverse();
+    var text = 'Liked by ' + shown.join(', ');
+    if(names.length > shown.length){ text += ' and ' + (names.length - shown.length) + ' more'; }
+    namesEl.textContent = text;
+  }
+
+  function setLikedState(isLiked){
+    btn.setAttribute('aria-pressed', isLiked ? 'true' : 'false');
+    btn.classList.toggle('liked', isLiked);
+    btn.querySelector('.heart').textContent = isLiked ? '♥' : '♡';
+    btn.querySelector('.like-label').textContent = isLiked ? 'Liked' : 'Like';
+  }
+
+  function load(){
+    fetch(API + '?page=' + encodeURIComponent(pageSlug))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+      })
+      .catch(function(){});
+    if(localStorage.getItem(likedKey())){ setLikedState(true); }
+  }
+
+  btn.addEventListener('click', function(){
+    if(localStorage.getItem(likedKey())) return;
+    widget.classList.add('composing');
+    form.hidden = false;
+    nameInput.focus();
+  });
+
+  cancelBtn.addEventListener('click', function(){
+    widget.classList.remove('composing');
+    form.hidden = true;
+    nameInput.value = '';
+  });
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var name = nameInput.value.trim();
+    if(!name) return;
+    var visitorId = getVisitorId();
+    var submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    fetch(API, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ page: pageSlug, name: name, visitorId: visitorId })
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+        localStorage.setItem(likedKey(), '1');
+        setLikedState(true);
+        widget.classList.remove('composing');
+        form.hidden = true;
+      })
+      .catch(function(){
+        alert('Could not save your like right now — please try again.');
+      })
+      .finally(function(){
+        submitBtn.disabled = false;
+      });
+  });
+
+  load();
 })();
 </script>
 </body>
