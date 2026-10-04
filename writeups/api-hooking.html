@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Userland API Hooking — Windows Memory Forensics // 0xREYAD</title>
+<meta name="description" content="Part 04 of a Windows memory forensics series: IAT hooking vs inline/trampoline hooking, how Volatility's apihooks plugin detects them, and the Zeus/Zbot case study.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0b0e12;
+    --panel:#111620;
+    --paper:#e9e4d4;
+    --accent:#5b8fd9;
+    --accent-dim:#33507a;
+    --accent-2:#4f8a86;
+    --line: rgba(233,228,212,0.14);
+    --text: #cfd3d6;
+    --text-dim:#7c848c;
+    --mono: 'JetBrains Mono', monospace;
+    --head: 'Space Grotesk', sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:var(--mono);
+    line-height:1.7;
+  }
+  a{color:var(--accent); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+
+  header{
+    position:sticky; top:0; z-index:10;
+    background:rgba(11,14,18,0.92);
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);
+  }
+  .bar{
+    max-width:860px; margin:0 auto; padding:16px 24px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand{font-family:var(--head); font-weight:700; font-size:15px; color:var(--paper); letter-spacing:.02em; position:relative;}
+  .brand span{color:var(--accent);}
+  .brand::after{ content:'_'; color:var(--accent); margin-left:2px; animation:blink 1.1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0;} }
+  .back{font-size:13px; color:var(--text-dim); position:relative; padding-bottom:4px;}
+  .back::after{ content:''; position:absolute; left:0; bottom:-2px; width:0; height:1px; background:var(--accent); box-shadow:0 0 6px var(--accent); transition:width .25s ease; }
+  .back:hover{color:var(--accent); text-decoration:none;}
+  .back:hover::after{ width:100%; }
+
+  main{max-width:1005px; margin:0 auto; padding:56px 24px 96px; position:relative; z-index:1;}
+
+  .kicker{
+    font-size:12px; color:var(--accent-2); letter-spacing:.06em;
+    display:flex; gap:10px; align-items:center; margin-bottom:18px;
+  }
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--accent-2); box-shadow:0 0 8px var(--accent-2);}
+
+  h1{
+    font-family:var(--head); font-weight:700; color:var(--paper);
+    font-size:clamp(28px,4.2vw,40px); line-height:1.2; margin-bottom:14px;
+  }
+  .dek{color:var(--text-dim); font-size:16px; max-width:62ch; margin-bottom:28px;}
+
+  .meta{
+    display:flex; flex-wrap:wrap; gap:18px; font-size:12.5px; color:var(--text-dim);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    padding:14px 0; margin-bottom:40px;
+  }
+  .meta b{color:var(--text); font-weight:500;}
+
+  article h2{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:22px; margin:48px 0 14px; padding-top:6px;
+    border-top:1px solid var(--line);
+    transition:border-color .3s ease;
+  }
+  article h2:hover{ border-color:var(--accent-dim); }
+  article h2 .num{color:var(--accent); margin-right:10px; font-family:var(--mono); font-size:15px;}
+  article h3{
+    font-family:var(--head); font-weight:600; color:var(--text);
+    font-size:16px; margin:26px 0 10px;
+  }
+  article h4{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:14.5px; margin:20px 0 8px;
+  }
+  article p{margin-bottom:14px; max-width:72ch; color:var(--text);}
+  article p.lede{color:var(--paper); font-size:17px;}
+  article ul, article ol{margin:0 0 16px 22px; max-width:70ch;}
+  article li{margin-bottom:6px;}
+  article strong{color:var(--paper); font-weight:600;}
+
+  .callout{
+    background:var(--panel); border-left:2px solid var(--accent);
+    padding:14px 18px; margin:20px 0; font-size:14.5px; color:var(--text);
+    transition:box-shadow .3s ease;
+  }
+  .callout:hover{ box-shadow:0 0 24px -8px rgba(91,143,217,.4); }
+
+  pre{
+    background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:16px 18px; overflow-x:auto; font-size:13px; color:var(--paper);
+    margin:16px 0 22px; line-height:1.55;
+  }
+  code{font-family:var(--mono); font-size:0.92em;}
+  p code, li code, h4 code{background:var(--panel); padding:1px 6px; border-radius:3px; color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:18px 0 24px;}
+  .table-wrap table{margin:0;}
+  th, td{border:1px solid var(--line); padding:9px 12px; text-align:left;}
+  th{color:var(--paper); font-family:var(--head); font-weight:600; background:var(--panel);}
+  td{color:var(--text);}
+  table code{color:var(--accent);}
+
+  .case-box{ border:1px solid var(--line); border-radius:4px; padding:18px 20px; margin:18px 0; }
+  .case-box h4{ margin-top:0; }
+
+  .img-frame{ margin:22px 0 28px; }
+  .img-frame .img-card{ background:#0f131a; border:1px solid var(--line); border-radius:8px; padding:14px; overflow-x:auto; display:flex; justify-content:center; }
+  .img-frame img{ max-width:100%; height:auto; display:block; }
+  .img-frame figcaption{ margin-top:9px; font-size:12.5px; color:var(--text-dim); }
+
+  .series-nav{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; font-size:13.5px;}
+  .series-nav a{color:var(--text-dim);}
+  .series-nav a:hover{color:var(--accent);}
+
+  .like-widget{ margin:0 0 40px; padding:18px 20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  .like-btn{ display:inline-flex; align-items:center; gap:8px; background:transparent; border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13.5px; padding:9px 16px; border-radius:999px; cursor:pointer; transition:.2s ease; }
+  .like-btn:hover{ border-color:var(--accent-dim); color:var(--paper); }
+  .like-btn.liked{ border-color:var(--accent); color:var(--accent); background:rgba(91,143,217,.08); }
+  .like-btn:disabled{ cursor:default; }
+  .like-btn .heart{ font-size:15px; }
+  .like-count{ color:var(--accent-2); font-weight:600; }
+  .like-names{ margin-top:10px; font-size:12.5px; color:var(--text-dim); min-height:1em; }
+  .like-form{ display:none; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+  .like-widget.composing .like-form{ display:flex; }
+  .like-form input{ background:var(--ink); border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13px; padding:8px 12px; border-radius:6px; flex:1; min-width:160px; }
+  .like-form input:focus{ outline:none; border-color:var(--accent-dim); }
+  .like-form button[type="submit"]{ background:var(--accent); color:var(--ink); border:none; border-radius:6px; padding:8px 16px; font-family:var(--mono); font-size:13px; font-weight:700; cursor:pointer; }
+  .like-form button[type="submit"]:hover{ opacity:.9; }
+  .like-form button[type="submit"]:disabled{ opacity:.6; cursor:default; }
+  .like-cancel{ background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:6px; padding:8px 12px; font-family:var(--mono); font-size:13px; cursor:pointer; }
+  .like-cancel:hover{ color:var(--text); }
+
+  footer{border-top:1px solid var(--line); padding:28px 24px; text-align:center; font-size:12px; color:var(--text-dim); position:relative; z-index:1;}
+
+  /* ambient life: drifting glow, moving grid */
+  .bg-fx{ position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  .bg-fx .grid{ position:absolute; inset:0; background-image:linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size:46px 46px; opacity:.4; -webkit-mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); }
+  .bg-fx .orb{ position:absolute; border-radius:50%; filter:blur(80px); }
+  .bg-fx .o1{ width:420px; height:420px; background:var(--accent); opacity:.24; top:-140px; left:-100px; animation:drift1 22s ease-in-out infinite; }
+  .bg-fx .o2{ width:360px; height:360px; background:var(--accent-2); opacity:.2; bottom:-160px; right:-100px; animation:drift2 27s ease-in-out infinite; }
+  .bg-fx .o3{ width:280px; height:280px; background:var(--accent-dim); opacity:.18; top:35%; left:55%; animation:drift1 19s ease-in-out infinite reverse; }
+  .bg-fx .scan{ position:absolute; left:0; right:0; top:-160px; height:160px; background:linear-gradient(to bottom, transparent, rgba(91,143,217,0.06), transparent); animation:scanmove 10s linear infinite; }
+  @keyframes drift1{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(70px,45px) scale(1.15);} }
+  @keyframes drift2{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(-55px,-35px) scale(1.12);} }
+  @keyframes scanmove{ 0%{ transform:translateY(0);} 100%{ transform:translateY(calc(100vh + 160px));} }
+
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto;}
+    .bg-fx .orb, .bg-fx .scan, .brand::after{ animation:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <div class="brand">0x<span>REYAD</span></div>
+    <a class="back" href="/writeups.html">&larr; All writeups</a>
+  </div>
+</header>
+
+<main>
+  <div class="kicker"><span class="dot"></span>WINDOWS MEMORY FORENSICS — PART 04</div>
+  <h1>Userland API hooking: IAT hooks, trampolines, and how apihooks finds them</h1>
+  <p class="dek">Previous parts covered process enumeration, DLL analysis, and how the Windows loader brings a process to life. This part focuses on a technique attackers use to intercept execution <em>after</em> a process is already running: API Hooking.</p>
+
+  <div class="meta">
+    <span><b>Series</b> — Windows Memory Forensics, Part 04</span>
+    <span><b>Topic</b> — IAT Hooking, Inline/Trampoline Hooking, apihooks</span>
+    <span><b>Read</b> — ~15 min</span>
+  </div>
+
+  <div class="like-widget" data-page="api-hooking">
+    <button class="like-btn" id="likeBtn" type="button" aria-pressed="false">
+      <span class="heart">♡</span>
+      <span class="like-label">Like</span>
+      <span class="like-count" id="likeCount">0</span>
+    </button>
+    <div class="like-names" id="likeNames"></div>
+    <form class="like-form" id="likeForm" hidden>
+      <input type="text" id="likeNameInput" placeholder="Your name" maxlength="40" required>
+      <button type="submit">Send</button>
+      <button type="button" class="like-cancel" id="likeCancel">Cancel</button>
+    </form>
+  </div>
+
+  <article>
+    <h2><span class="num">01</span>Why userland hooks?</h2>
+    <p>As kernel-level protections like <strong>PatchGuard</strong> made traditional kernel hooks (SSDT/IDT patching) increasingly impractical, attackers shifted their focus to <strong>Userland Hooking</strong>.</p>
+    <p>Userland hooks operate at the application level, which means:</p>
+    <ul>
+      <li>They don't affect the entire system — only specific processes</li>
+      <li>They are easier to implement than kernel hooks</li>
+      <li>Legitimate software also uses them heavily, creating more <strong>false positives</strong> for investigators</li>
+    </ul>
+
+    <h2><span class="num">02</span>IAT hooking</h2>
+    <h3>2.1 Background: what is the IAT?</h3>
+    <p>When you write a program and want to use a ready-made function like <code>CreateFile</code> or <code>MessageBox</code>, those functions don't live in your code — they live in system DLLs like <code>kernel32.dll</code> and <code>user32.dll</code>. The problem: the address of any given function in memory isn't fixed. It changes between Windows versions and updates, so you can't hardcode it.</p>
+    <p>The solution is the <strong>Import Address Table (IAT)</strong> — a structure inside every PE file (<code>.exe</code> or <code>.dll</code>) that acts like a shopping list. It contains the names of the external functions the program needs and, after the loader runs, the actual in-memory addresses of those functions.</p>
+
+    <h3>2.2 How IAT hooking works</h3>
+    <p>IAT Hooking modifies an entry inside a process's <strong>Import Address Table</strong>, replacing the legitimate function address with the address of malicious code:</p>
+    <pre>Program
+   ↓
+IAT Entry  ← address replaced by attacker
+   ↓
+Malicious Function</pre>
+    <p>Every time the program calls that function, it silently gets redirected to the attacker's code instead.</p>
+
+    <h3>2.3 Detectability</h3>
+    <p>IAT Hooking is relatively simple to implement — and relatively simple to detect, by inspecting the IAT and comparing its entries against the expected export addresses of the loaded DLLs.</p>
+
+    <h2><span class="num">03</span>Inline / trampoline hooking</h2>
+    <h3>3.1 How it works</h3>
+    <p>Instead of modifying the IAT, the attacker goes directly into the <strong>function's code in memory</strong> and overwrites the first 5 bytes with a <code>JMP</code> instruction pointing to malicious code:</p>
+    <pre>Original Function
+      ↓
+   JMP malicious code    ← first 5 bytes overwritten
+      ↓
+Attacker Memory
+      ↓
+(malicious code executes, then jumps back to original function)</pre>
+    <p>After the malicious code runs, execution jumps back to the rest of the original function so the program continues normally and nothing looks broken.</p>
+
+    <h3>3.2 Why it's more dangerous</h3>
+    <p>The modification exists <strong>only in memory</strong> — the DLL file on disk remains completely untouched. Security tools that only inspect files on disk will never see it. Only memory analysis can reliably surface it.</p>
+
+    <h2><span class="num">04</span>How Volatility detects API hooks: apihooks</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Item</th><th>Details</th></tr>
+      <tr><td>Plugin</td><td><code>apihooks</code></td></tr>
+      <tr><td>Purpose</td><td>Detect Userland API hooks</td></tr>
+      <tr><td>Hook Types</td><td>IAT, Inline/Trampoline</td></tr>
+      <tr><td>Architecture</td><td>x86 + x64</td></tr>
+      <tr><td>Volatility 3</td><td>No direct equivalent</td></tr>
+      <tr><td>Performance</td><td>Can take a long time on large images</td></tr>
+    </table>
+    </div>
+    <p>The plugin produces large amounts of output — there are many functions and memory locations to inspect. The goal is to look for <strong>anomalies</strong>, not to assume every hook is malicious.</p>
+    <p>To scope output to a specific process:</p>
+    <pre><code class="cmd">apihooks -p &lt;PID&gt;</code></pre>
+    <p>Use <code>-R</code> to skip kernel-mode checks.</p>
+
+    <h2><span class="num">05</span>How apihooks works internally</h2>
+    <h3>Step 1: determine the expected address</h3>
+    <p>For every process, the tool knows which DLLs are loaded and where each one is mapped in memory. For example, if <code>kernel32.dll</code> is loaded at base address <code>0x7c800000</code>, and the export table inside that DLL says <code>CreateFile</code> is at offset <code>0x1234</code>, then:</p>
+    <pre>Expected address of CreateFile = 0x7c800000 + 0x1234 = 0x7c801234</pre>
+    <p>This expected address is derived from the <strong>Export Table</strong> of each loaded DLL — a structure inside the DLL that maps function names to their offsets.</p>
+
+    <h3>Step 2: read the actual address from the IAT</h3>
+    <p>The tool opens the process's <strong>IAT</strong> and reads the address currently written next to the function name <code>CreateFile</code>.</p>
+
+    <h3>Step 3: compare the two</h3>
+    <ul>
+      <li>If the IAT address <strong>matches</strong> the expected export address → no hook, everything is clean</li>
+      <li>If the IAT address <strong>differs</strong> from the expected export address → hook detected; the tool takes the new address and begins inspecting it</li>
+    </ul>
+
+    <h3>Step 4: identify the destination (Mapped vs Private)</h3>
+    <p>The tool takes the new (hooked) address and queries the memory from the <strong>VAD (Virtual Address Descriptor)</strong>: "What region does this address belong to, and where did it come from?"</p>
+    <p>The VAD entry contains:</p>
+    <ul>
+      <li>Start address of the region</li>
+      <li>Size of the region</li>
+      <li><strong>Permissions</strong> (Read/Write/Execute)</li>
+      <li><strong>Source type</strong>: is it <strong>Mapped</strong> (backed by a file on disk) or <strong>Private</strong> (allocated in memory with no file backing)?</li>
+    </ul>
+    <p>Two outcomes:</p>
+    <p><strong>If the region is Mapped:</strong> the tool retrieves the associated file name from the VAD and reports something like: "This hook jumps to an address inside <code>C:\Windows\System32\kernel32.dll</code>." This is not automatically malicious — it may be legitimate security software or a known-good hook (needs further investigation).</p>
+    <p><strong>If the region is Private:</strong> the region was allocated in memory (via <code>VirtualAlloc</code>) and has no backing file on disk. The tool cannot find a file name, so it reports the <code>Hooking Module</code> column as <strong>"Unknown"</strong> — and that is a strong indicator of injected, fileless code.</p>
+
+    <h2><span class="num">06</span>Legitimate API hooks</h2>
+    <p>Hook does not equal malware. Many legitimate applications use API hooking extensively. Examples:</p>
+    <ul>
+      <li><code>svchost</code></li>
+      <li>VMware Tools</li>
+      <li>Security software (AV/EDR)</li>
+      <li>CodeMeter/HASP license protection</li>
+    </ul>
+    <p>Known legitimate Microsoft DLLs that frequently appear as hooking modules and should be treated as <strong>potentially known-good</strong>:</p>
+    <pre>setupapi.dll
+mswsock.dll
+sfc_os.dll
+adsldpc.dll
+advapi32.dll
+secur32.dll
+ws2_32.dll
+iphlpapi.dll
+ntdll.dll
+kernel32.dll
+user32.dll
+gdi32.dll</pre>
+
+    <h2><span class="num">07</span>Case study — Zeus / Zbot</h2>
+    <p>Zeus used extensive Userland DLL Hooking across infected systems.</p>
+    <div class="case-box">
+      <h4>Example hook found in memory</h4>
+      <pre>Process:     services.exe
+Victim DLL:  USER32.dll
+Function:    GetClipboardData
+Hook Type:   Inline/Trampoline</pre>
+      <p>The original function's first bytes had been replaced with:</p>
+      <pre>JMP 0x7f4fd5</pre>
+      <p>The destination address:</p>
+      <pre>&lt;unknown&gt;</pre>
+      <p>The jump target was memory that wasn't mapped to any normal file-backed module — meaning the code being jumped to existed only in private, allocated memory with no corresponding file on disk.</p>
+      <p>Zeus had <strong>nearly 400 DLL hooks</strong> across a single process — which by itself is a strong statistical anomaly, entirely apart from what each individual hook was doing.</p>
+    </div>
+
+    <h2><span class="num">08</span>What makes an API hook suspicious?</h2>
+    <p>Look for combinations of the following signals:</p>
+    <ol>
+      <li><strong>Large number of hooks</strong> — hundreds of hooks in a single process is abnormal</li>
+      <li><strong>Hooking security-sensitive functions</strong> — clipboard access, cryptographic APIs, network calls, authentication functions</li>
+      <li><strong>Hooking Module = <code>&lt;unknown&gt;</code></strong> — the hook destination is in private, fileless memory</li>
+      <li><strong>Jump destination in unmapped or anonymous memory</strong> — not associated with any DLL on disk</li>
+      <li><strong>Hooks inside unexpected processes</strong> — e.g. clipboard hooks inside <code>services.exe</code></li>
+      <li><strong>Functions that make no sense for the process</strong> — a system service hooking <code>GetClipboardData</code> has no legitimate reason to do so</li>
+    </ol>
+    <div class="callout"><strong>Example suspicious pattern:</strong>
+      <pre style="margin:10px 0 0;">services.exe
+   ↓
+GetClipboardData()
+   ↓
+JMP
+   ↓
+&lt;unknown memory&gt;</pre>
+      That combination is significantly more suspicious than a single hook from a known security DLL.
+    </div>
+
+    <h2><span class="num">09</span>Trampoline hooking — deep dive</h2>
+    <h3>9.1 The core problem</h3>
+    <p>The term "Inline Hook" describes placing a <code>JMP</code> at the start of a function. But that immediately creates a problem: what happens to the original bytes that got overwritten?</p>
+    <p>Assume we have a function in memory:</p>
+    <pre>MyFunction:
+
+0x1000:  push rbp
+0x1001:  mov  rbp, rsp
+0x1004:  sub  rsp, 20h
+0x1008:  mov  eax, 1
+0x100D:  ...</pre>
+    <p>We want to intercept it:</p>
+    <pre>MyFunction()
+      ↓
+   Hook()
+      ↓
+Original MyFunction()</pre>
+    <p>The easiest approach: overwrite the first bytes at <code>0x1000</code> with a <code>JMP</code> to our hook:</p>
+    <pre>0x1000: jmp Hook</pre>
+    <p>But now we have destroyed the original instructions:</p>
+    <pre>push rbp
+mov  rbp, rsp
+sub  rsp, 20h</pre>
+    <p>When the hook finishes and tries to call the original function, it can't jump back to <code>0x1000</code> — that address now contains <code>jmp Hook</code>, which creates an infinite loop:</p>
+    <pre>Hook → 0x1000 → Hook → 0x1000 → ...</pre>
+    <p>This is exactly why the <strong>Trampoline</strong> exists.</p>
+
+    <h3>9.2 What is a trampoline?</h3>
+    <p>A trampoline is a <strong>copy of the overwritten original instructions, followed by a jump back into the original function at the point past the overwritten region</strong>.</p>
+    <p>We copy the bytes we destroyed into a new location in memory:</p>
+    <pre>Trampoline @ 0x8000:
+
+0x8000: push rbp
+0x8001: mov  rbp, rsp
+0x8004: sub  rsp, 20h
+0x8008: jmp  0x1008      ← resume original function here</pre>
+    <p>The <code>jmp 0x1008</code> at the end returns execution to the first instruction in <code>MyFunction</code> that was <em>not</em> overwritten.</p>
+
+    <h3>9.3 The complete picture</h3>
+    <p>After hooking, memory looks roughly like this:</p>
+
+    <figure class="img-frame">
+      <div class="img-card"><img src="/writeups/assets/trampoline-hooking.svg" alt="Diagram: original function with its first bytes overwritten by a JMP to the hook function, which calls the trampoline, which runs the copied original instructions and jumps back into the original function past the overwritten region"></div>
+      <figcaption>The three pieces after hooking: the patched original function, the hook function that inspects/logs, and the trampoline that preserves the overwritten bytes and jumps back.</figcaption>
+    </figure>
+
+    <p>Full execution path:</p>
+    <pre>Application
+     |
+     | CALL MyFunction
+     v
++----------------+
+| MyFunction     |
+| JMP Hook       |
++-------+--------+
+        |
+        v
++----------------+
+| Hook Function  |
++-------+--------+
+        |
+        | CALL Trampoline
+        v
++----------------+
+| Trampoline     |
+| original bytes |
++-------+--------+
+        |
+        | JMP 0x1008
+        v
++----------------+
+| MyFunction     |
+| remaining code |
++----------------+</pre>
+
+    <h3>9.4 Why not just copy the first 5 bytes?</h3>
+    <p>x86/x64 instructions are <strong>variable length</strong> — they are not all the same size. For example:</p>
+    <pre>push rbp       → 1 byte
+mov  rbp, rsp  → 3 bytes
+sub  rsp, 20h  → 4 bytes</pre>
+    <p>If you blindly copy 5 bytes, you may cut an instruction in half:</p>
+    <pre>Instruction A = 3 bytes
+Instruction B = 4 bytes
+
+Taking 5 bytes:
+AAA BB  ← only 2 bytes of B — invalid machine code</pre>
+    <p>A correct hooking implementation must perform <strong>instruction disassembly</strong> and copy complete instructions until it has covered at least the number of bytes it needs for the <code>JMP</code>. For example: <code>1 + 3 + 4 = 8 bytes</code>, so all three instructions get copied.</p>
+
+    <h3>9.5 Hook vs trampoline — they are not the same thing</h3>
+    <p>A common point of confusion:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th></th><th>Purpose</th></tr>
+      <tr><td><strong>Hook</strong></td><td>The interception logic — the code that receives execution and inspects/modifies behavior</td></tr>
+      <tr><td><strong>Trampoline</strong></td><td>The gateway that re-executes the overwritten original bytes and then returns to the rest of the original function</td></tr>
+    </table>
+    </div>
+    <p>The hook calls the trampoline via a function pointer:</p>
+    <pre>HookFunction(...)
+{
+    // inspect arguments, log, modify...
+
+    return OriginalFunction(...);   // OriginalFunction points to the trampoline, not 0x1000
+}</pre>
+    <p><code>OriginalFunction</code> here resolves to <code>0x8000</code> (the trampoline), not the real function's start address.</p>
+
+    <h3>9.6 RIP-relative instructions (x64 problem)</h3>
+    <p>On x64, many instructions use <code>RIP</code>-relative addressing:</p>
+    <pre>mov rax, [rip + 0x1234]</pre>
+    <p>The effective address depends on the current value of <code>RIP</code>. If this instruction originally lived at <code>0x1000</code> and you copy it to <code>0x8000</code>, the same bytes now calculate a completely different effective address:</p>
+    <pre>Original:   0x1000 + offset → 0x5000   (correct)
+Trampoline: 0x8000 + offset → 0x9000   (wrong)</pre>
+    <p>A correct trampoline implementation must detect these instructions and apply <strong>relocation/fix-ups</strong> when copying, rather than doing a blind <code>memcpy</code>. This is one of the primary reasons x64 hooking is significantly more complex than x86.</p>
+
+    <h3>9.7 Relative CALL/JMP instructions</h3>
+    <p>The same problem applies to relative <code>CALL</code> and <code>JMP</code> instructions:</p>
+    <pre>call 0x12345678
+jmp  0x12345678</pre>
+    <p>If the displacement is relative to the instruction's address, copying it to a new location changes the target. A correct trampoline implementation must detect and handle:</p>
+    <ul>
+      <li>RIP-relative references</li>
+      <li>Relative CALL instructions</li>
+      <li>Relative JMP instructions</li>
+      <li>Conditional branches</li>
+    </ul>
+
+    <h3>9.8 The long jump problem on x64</h3>
+    <p>On x86, a <code>JMP rel32</code> can reach anywhere within a ±2GB range relative to the instruction. On x64, if the hook lives far enough away in the address space that a <code>rel32</code> can't reach it, a larger sequence is needed:</p>
+    <pre>mov rax, HookAddress
+jmp rax</pre>
+    <p>This sequence is longer than a simple 5-byte <code>JMP</code>, which means more original instructions need to be copied into the trampoline to make room for it, increasing the complexity of the copy-and-fixup step.</p>
+
+    <h3>9.9 Complete conceptual example</h3>
+    <p><strong>Before hooking:</strong></p>
+    <pre>Function @ 0x1000:
+
+1000: push rbp
+1001: mov  rbp, rsp
+1004: sub  rsp, 20h
+1008: mov  eax, 1
+100D: pop  rbp
+100E: ret</pre>
+    <p>We decide the hook requires 8 bytes. We copy the first 8 bytes to the trampoline:</p>
+    <pre>Trampoline @ 0x8000:
+
+8000: push rbp
+8001: mov  rbp, rsp
+8004: sub  rsp, 20h
+8008: jmp  0x1008</pre>
+    <p>We overwrite the original:</p>
+    <pre>Function @ 0x1000:
+
+1000: jmp 0x5000     ← redirected to hook
+1005: (padding)
+1008: mov eax, 1
+100D: pop rbp
+100E: ret</pre>
+    <p>Full execution flow:</p>
+    <pre>CALL 0x1000
+    ↓
+JMP 0x5000          (hook)
+    ↓
+inspect / log
+    ↓
+CALL 0x8000         (trampoline)
+    ↓
+PUSH RBP
+MOV  RBP, RSP
+SUB  RSP, 20h
+    ↓
+JMP 0x1008          (resume original)
+    ↓
+MOV EAX, 1
+POP RBP
+RET</pre>
+
+    <h3>9.10 IAT hook vs inline/trampoline hook — summary</h3>
+    <pre>IAT Hook
+──────────────────
+CALL
+ |
+ v
+IAT entry  ← pointer replaced
+ |
+ v
+Hook
+
+
+Inline + Trampoline Hook
+──────────────────────────
+CALL
+ |
+ v
+Function start
+ |
+ | JMP          ← first bytes overwritten
+ v
+Hook
+ |
+ v
+Trampoline (copied original bytes + JMP back)
+ |
+ v
+Original function + N</pre>
+    <ul>
+      <li>In an IAT hook: you replace a <strong>pointer</strong></li>
+      <li>In an Inline hook: you replace <strong>instructions</strong></li>
+      <li>The Trampoline: preserves the replaced instructions and provides a safe path back to the original function</li>
+    </ul>
+
+    <h3>9.11 Mental model</h3>
+    <pre>          ORIGINAL FUNCTION
+                 |
+           [ overwritten ]
+                 |
+                 v
+             JMP HOOK
+                 |
+                 v
+          +--------------+
+          |     HOOK     |
+          +------+-------+
+                 |
+                 | call
+                 v
+          +--------------+
+          |  TRAMPOLINE  |
+          |              |
+          | copied bytes |
+          | copied bytes |
+          +------+-------+
+                 |
+                 | JMP
+                 v
+          ORIGINAL + N</pre>
+    <div class="callout">
+      <strong>The Trampoline is not the Hook.</strong><br>
+      The Hook receives execution and applies its interception logic. The Trampoline preserves the original instructions that were overwritten and returns execution to the original function past the overwritten region.
+    </div>
+
+    <h2><span class="num">10</span>Investigation workflow</h2>
+    <pre>Run apihooks -p &lt;PID&gt;
+        ↓
+Filter out known-good DLLs
+        ↓
+Flag any hook where Hooking Module = &lt;unknown&gt;
+        ↓
+Cross-check flagged address with VAD (vadinfo)
+   → Private memory? → strong injection indicator
+   → Mapped memory? → identify the file, assess legitimacy
+        ↓
+Correlate with malfind / ldrmodules
+        ↓
+Determine: legitimate hook or injected code</pre>
+
+    <div class="series-nav">
+      <a href="/writeups/process-creation-internals.html">&larr; Part 03 — Process creation internals</a>
+      <a href="/writeups.html">All writeups →</a>
+    </div>
+  </article>
+</main>
+
+<footer>© 2026 Ahmed Mohamed Reyad — All rights reserved</footer>
+
+<script>
+(function(){
+  var fx = document.createElement('div');
+  fx.className = 'bg-fx';
+  fx.innerHTML = '<div class="grid"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><div class="scan"></div>';
+  document.body.insertBefore(fx, document.body.firstChild);
+})();
+
+(function(){
+  var API = '/api/likes';
+  var widget = document.querySelector('.like-widget');
+  if(!widget) return;
+  var pageSlug = widget.dataset.page;
+  var btn = document.getElementById('likeBtn');
+  var countEl = document.getElementById('likeCount');
+  var namesEl = document.getElementById('likeNames');
+  var form = document.getElementById('likeForm');
+  var nameInput = document.getElementById('likeNameInput');
+  var cancelBtn = document.getElementById('likeCancel');
+
+  function getVisitorId(){
+    var id = localStorage.getItem('0xreyad_visitor_id');
+    if(!id){
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('v-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      localStorage.setItem('0xreyad_visitor_id', id);
+    }
+    return id;
+  }
+
+  function likedKey(){ return '0xreyad_liked_' + pageSlug; }
+
+  function renderNames(names){
+    if(!names || !names.length){ namesEl.textContent = ''; return; }
+    var shown = names.slice(-6).reverse();
+    var text = 'Liked by ' + shown.join(', ');
+    if(names.length > shown.length){ text += ' and ' + (names.length - shown.length) + ' more'; }
+    namesEl.textContent = text;
+  }
+
+  function setLikedState(isLiked){
+    btn.setAttribute('aria-pressed', isLiked ? 'true' : 'false');
+    btn.classList.toggle('liked', isLiked);
+    btn.querySelector('.heart').textContent = isLiked ? '♥' : '♡';
+    btn.querySelector('.like-label').textContent = isLiked ? 'Liked' : 'Like';
+  }
+
+  function load(){
+    fetch(API + '?page=' + encodeURIComponent(pageSlug))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+      })
+      .catch(function(){});
+    if(localStorage.getItem(likedKey())){ setLikedState(true); }
+  }
+
+  btn.addEventListener('click', function(){
+    if(localStorage.getItem(likedKey())) return;
+    widget.classList.add('composing');
+    form.hidden = false;
+    nameInput.focus();
+  });
+
+  cancelBtn.addEventListener('click', function(){
+    widget.classList.remove('composing');
+    form.hidden = true;
+    nameInput.value = '';
+  });
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var name = nameInput.value.trim();
+    if(!name) return;
+    var visitorId = getVisitorId();
+    var submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    fetch(API, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ page: pageSlug, name: name, visitorId: visitorId })
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+        localStorage.setItem(likedKey(), '1');
+        setLikedState(true);
+        widget.classList.remove('composing');
+        form.hidden = true;
+      })
+      .catch(function(){
+        alert('Could not save your like right now — please try again.');
+      })
+      .finally(function(){
+        submitBtn.disabled = false;
+      });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
