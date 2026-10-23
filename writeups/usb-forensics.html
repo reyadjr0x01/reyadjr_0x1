@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>USB Forensics: Registry, Event Logs, Shellbags &amp; Jump Lists // 0xREYAD</title>
+<meta name="description" content="A practical guide to tracking USB device usage on Windows: USBSTOR, event logs, Shellbags and Jump Lists, and how to combine them into a complete investigation timeline for DFIR, insider threat and data exfiltration cases.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0b0e12;
+    --panel:#111620;
+    --paper:#e9e4d4;
+    --accent:#5b8fd9;
+    --accent-dim:#33507a;
+    --accent-2:#4f8a86;
+    --line: rgba(233,228,212,0.14);
+    --text: #cfd3d6;
+    --text-dim:#7c848c;
+    --mono: 'JetBrains Mono', monospace;
+    --head: 'Space Grotesk', sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:var(--mono);
+    line-height:1.7;
+  }
+  a{color:var(--accent); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+
+  header{
+    position:sticky; top:0; z-index:10;
+    background:rgba(11,14,18,0.92);
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);
+  }
+  .bar{
+    max-width:860px; margin:0 auto; padding:16px 24px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand{font-family:var(--head); font-weight:700; font-size:15px; color:var(--paper); letter-spacing:.02em; position:relative;}
+  .brand span{color:var(--accent);}
+  .brand::after{ content:'_'; color:var(--accent); margin-left:2px; animation:blink 1.1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0;} }
+  .back{font-size:13px; color:var(--text-dim); position:relative; padding-bottom:4px;}
+  .back::after{ content:''; position:absolute; left:0; bottom:-2px; width:0; height:1px; background:var(--accent); box-shadow:0 0 6px var(--accent); transition:width .25s ease; }
+  .back:hover{color:var(--accent); text-decoration:none;}
+  .back:hover::after{ width:100%; }
+
+  main{max-width:1005px; margin:0 auto; padding:56px 24px 96px; position:relative; z-index:1;}
+
+  .kicker{
+    font-size:12px; color:var(--accent-2); letter-spacing:.06em;
+    display:flex; gap:10px; align-items:center; margin-bottom:18px;
+  }
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--accent-2); box-shadow:0 0 8px var(--accent-2);}
+
+  h1{
+    font-family:var(--head); font-weight:700; color:var(--paper);
+    font-size:clamp(28px,4.2vw,40px); line-height:1.2; margin-bottom:14px;
+  }
+  .dek{color:var(--text-dim); font-size:16px; max-width:62ch; margin-bottom:28px;}
+
+  .meta{
+    display:flex; flex-wrap:wrap; gap:18px; font-size:12.5px; color:var(--text-dim);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    padding:14px 0; margin-bottom:40px;
+  }
+  .meta b{color:var(--text); font-weight:500;}
+
+  article h2{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:22px; margin:48px 0 14px; padding-top:6px;
+    border-top:1px solid var(--line);
+    transition:border-color .3s ease;
+  }
+  article h2:hover{ border-color:var(--accent-dim); }
+  article h2 .num{color:var(--accent); margin-right:10px; font-family:var(--mono); font-size:15px;}
+  article h3{
+    font-family:var(--head); font-weight:600; color:var(--text);
+    font-size:16px; margin:26px 0 10px;
+  }
+  article h4{
+    font-family:var(--head); font-weight:600; color:var(--paper);
+    font-size:14.5px; margin:20px 0 8px;
+  }
+  article p{margin-bottom:14px; max-width:72ch; color:var(--text);}
+  article p.lede{color:var(--paper); font-size:17px;}
+  article ul, article ol{margin:0 0 16px 22px; max-width:70ch;}
+  article li{margin-bottom:6px;}
+  article strong{color:var(--paper); font-weight:600;}
+
+  .callout{
+    background:var(--panel); border-left:2px solid var(--accent);
+    padding:14px 18px; margin:20px 0; font-size:14.5px; color:var(--text);
+    transition:box-shadow .3s ease;
+  }
+  .callout:hover{ box-shadow:0 0 24px -8px rgba(91,143,217,.4); }
+
+  pre{
+    background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:16px 18px; overflow-x:auto; font-size:13px; color:var(--paper);
+    margin:16px 0 22px; line-height:1.55;
+  }
+  code{font-family:var(--mono); font-size:0.92em;}
+  p code, li code, h4 code{background:var(--panel); padding:1px 6px; border-radius:3px; color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:18px 0 24px;}
+  .table-wrap table{margin:0;}
+  th, td{border:1px solid var(--line); padding:9px 12px; text-align:left;}
+  th{color:var(--paper); font-family:var(--head); font-weight:600; background:var(--panel);}
+  td{color:var(--text);}
+  table code{color:var(--accent);}
+
+  .case-box{ border:1px solid var(--line); border-radius:4px; padding:18px 20px; margin:18px 0; }
+  .case-box h4{ margin-top:0; }
+
+  .img-frame{ margin:22px 0 28px; }
+  .img-frame .img-card{ background:#0f131a; border:1px solid var(--line); border-radius:8px; padding:14px; overflow-x:auto; display:flex; justify-content:center; }
+  .img-frame img{ max-width:100%; height:auto; display:block; }
+  .img-frame figcaption{ margin-top:9px; font-size:12.5px; color:var(--text-dim); }
+
+  .series-nav{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; font-size:13.5px;}
+  .series-nav a{color:var(--text-dim);}
+  .series-nav a:hover{color:var(--accent);}
+
+  .like-widget{ margin:0 0 40px; padding:18px 20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  .like-btn{ display:inline-flex; align-items:center; gap:8px; background:transparent; border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13.5px; padding:9px 16px; border-radius:999px; cursor:pointer; transition:.2s ease; }
+  .like-btn:hover{ border-color:var(--accent-dim); color:var(--paper); }
+  .like-btn.liked{ border-color:var(--accent); color:var(--accent); background:rgba(91,143,217,.08); }
+  .like-btn:disabled{ cursor:default; }
+  .like-btn .heart{ font-size:15px; }
+  .like-count{ color:var(--accent-2); font-weight:600; }
+  .like-names{ margin-top:10px; font-size:12.5px; color:var(--text-dim); min-height:1em; }
+  .like-form{ display:none; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+  .like-widget.composing .like-form{ display:flex; }
+  .like-form input{ background:var(--ink); border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:13px; padding:8px 12px; border-radius:6px; flex:1; min-width:160px; }
+  .like-form input:focus{ outline:none; border-color:var(--accent-dim); }
+  .like-form button[type="submit"]{ background:var(--accent); color:var(--ink); border:none; border-radius:6px; padding:8px 16px; font-family:var(--mono); font-size:13px; font-weight:700; cursor:pointer; }
+  .like-form button[type="submit"]:hover{ opacity:.9; }
+  .like-form button[type="submit"]:disabled{ opacity:.6; cursor:default; }
+  .like-cancel{ background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:6px; padding:8px 12px; font-family:var(--mono); font-size:13px; cursor:pointer; }
+  .like-cancel:hover{ color:var(--text); }
+
+  footer{border-top:1px solid var(--line); padding:28px 24px; text-align:center; font-size:12px; color:var(--text-dim); position:relative; z-index:1;}
+
+  /* ambient life: drifting glow, moving grid */
+  .bg-fx{ position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  .bg-fx .grid{ position:absolute; inset:0; background-image:linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size:46px 46px; opacity:.4; -webkit-mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); mask-image:radial-gradient(ellipse 75% 55% at 50% 0%, #000 35%, transparent 100%); }
+  .bg-fx .orb{ position:absolute; border-radius:50%; filter:blur(80px); }
+  .bg-fx .o1{ width:420px; height:420px; background:var(--accent); opacity:.24; top:-140px; left:-100px; animation:drift1 22s ease-in-out infinite; }
+  .bg-fx .o2{ width:360px; height:360px; background:var(--accent-2); opacity:.2; bottom:-160px; right:-100px; animation:drift2 27s ease-in-out infinite; }
+  .bg-fx .o3{ width:280px; height:280px; background:var(--accent-dim); opacity:.18; top:35%; left:55%; animation:drift1 19s ease-in-out infinite reverse; }
+  .bg-fx .scan{ position:absolute; left:0; right:0; top:-160px; height:160px; background:linear-gradient(to bottom, transparent, rgba(91,143,217,0.06), transparent); animation:scanmove 10s linear infinite; }
+  @keyframes drift1{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(70px,45px) scale(1.15);} }
+  @keyframes drift2{ 0%,100%{ transform:translate(0,0) scale(1);} 50%{ transform:translate(-55px,-35px) scale(1.12);} }
+  @keyframes scanmove{ 0%{ transform:translateY(0);} 100%{ transform:translateY(calc(100vh + 160px));} }
+
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto;}
+    .bg-fx .orb, .bg-fx .scan, .brand::after{ animation:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <div class="brand">0x<span>REYAD</span></div>
+    <a class="back" href="/writeups.html">&larr; All writeups</a>
+  </div>
+</header>
+
+<main>
+  <div class="kicker"><span class="dot"></span>DFIR — USB FORENSICS</div>
+  <h1>USB forensics: registry, event logs, Shellbags and Jump Lists</h1>
+  <p class="dek">A practical guide to tracking USB device usage on Windows and building a complete investigation timeline for DFIR, Insider Threat, and Data Exfiltration cases.</p>
+
+  <div class="meta">
+    <span><b>Topic</b> — USBSTOR, Event Logs, Shellbags, Jump Lists</span>
+    <span><b>Use case</b> — DFIR, Insider Threat, Data Exfiltration</span>
+    <span><b>Read</b> — ~8 min</span>
+  </div>
+
+  <div class="like-widget" data-page="usb-forensics">
+    <button class="like-btn" id="likeBtn" type="button" aria-pressed="false">
+      <span class="heart">♡</span>
+      <span class="like-label">Like</span>
+      <span class="like-count" id="likeCount">0</span>
+    </button>
+    <div class="like-names" id="likeNames"></div>
+    <form class="like-form" id="likeForm" hidden>
+      <input type="text" id="likeNameInput" placeholder="Your name" maxlength="40" required>
+      <button type="submit">Send</button>
+      <button type="button" class="like-cancel" id="likeCancel">Cancel</button>
+    </form>
+  </div>
+
+  <article>
+    <h2><span class="num">01</span>Registry artifacts</h2>
+
+    <h3>1.1 USBSTOR — storage devices only</h3>
+    <pre>HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR</pre>
+    <p>Covers flash drives, external HDDs/SSDs, and memory card readers. Not all USB devices — storage only.</p>
+    <p><strong>Structure:</strong></p>
+    <pre>USBSTOR
+ └── Disk&amp;Ven_SanDisk&amp;Prod_Cruzer_Blade    ← Vendor / Product
+      └── 4C530001230101117123              ← Serial Number</pre>
+    <p><strong>Key values inside the Serial Number subkey:</strong></p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Value</th><th>Example</th><th>Purpose</th></tr>
+      <tr><td>FriendlyName</td><td><code>SanDisk Cruzer Blade USB Device</code></td><td>Human-readable device name</td></tr>
+      <tr><td>ContainerID</td><td><code>{d4f7a123-xxxx-xxxx-xxxx}</code></td><td>Correlate device across Event Logs and SetupAPI</td></tr>
+    </table>
+    </div>
+    <div class="callout">The serial number is your most important IOC — it lets you link the same drive across multiple machines and investigations.</div>
+
+    <h3>1.2 Connection and disconnect times</h3>
+    <p>Under the serial number subkey → <code>Properties</code> → key starting with <code>83da6326...</code>:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Value</th><th>Meaning</th></tr>
+      <tr><td><code>0064</code></td><td>First / Last connection time</td></tr>
+      <tr><td><code>0066</code></td><td>Disconnect time</td></tr>
+    </table>
+    </div>
+
+    <h3>1.3 USB key — all USB devices</h3>
+    <pre>HKLM\SYSTEM\CurrentControlSet\Enum\USB</pre>
+    <p>Covers everything: keyboards, mice, Bluetooth adapters, webcams, hubs, and storage devices. Check the <code>Service</code> value inside each device subkey to identify type:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Service value</th><th>Device type</th></tr>
+      <tr><td><code>disk</code></td><td>Storage device</td></tr>
+      <tr><td><code>BTHUSB</code></td><td>Bluetooth adapter</td></tr>
+    </table>
+    </div>
+
+    <h2><span class="num">02</span>USB event logs</h2>
+    <p>All three sources live under:</p>
+    <pre>Event Viewer → Applications and Services Logs → Microsoft → Windows</pre>
+
+    <h3>2.1 Partition / Diagnostic — Event ID 1006</h3>
+    <p>Logged on USB connection. Contains:</p>
+    <pre>Manufacturer = SanDisk
+Model        = Cruzer Blade
+Size         = 64 GB
+Serial       = 4C530001230101117123</pre>
+    <p>Cross-referencing this serial with USBSTOR gives you independent corroboration from two sources.</p>
+
+    <h3>2.2 Kernel-PnP — Event IDs 400 / 410</h3>
+    <p>Logged when Windows configures the device. Contains <code>Device Name</code>, <code>Class GUID</code>, and <code>Device Instance ID</code>. The Class GUID (e.g. <code>{4d36e967-e325-11ce-bfc1-08002be10318}</code>) appears in the Registry too — same GUID + same timestamp across sources = same device.</p>
+
+    <h3>2.3 NTFS / Operational — Event ID 142</h3>
+    <p>Reveals the <strong>drive letter</strong> Windows assigned:</p>
+    <pre>Volume Name = E:</pre>
+    <p>This is the link between the physical device and everything that follows (Shellbags, Jump Lists, file access logs).</p>
+
+    <h2><span class="num">03</span>Shellbags</h2>
+
+    <h3>3.1 What they are</h3>
+    <p>Windows stores Shellbags in the Registry to remember folder display preferences (icon size, sort order, view type). For DFIR, they become a record of <strong>user folder navigation</strong> — even after the folder or the drive is gone.</p>
+
+    <h3>3.2 Locations</h3>
+    <pre>NTUSER.DAT\Software\Microsoft\Windows\Shell\BagMRU
+NTUSER.DAT\Software\Microsoft\Windows\Shell\Bags
+USRCLASS.DAT\Local Settings\Software\Microsoft\Windows\Shell\BagMRU
+USRCLASS.DAT\Local Settings\Software\Microsoft\Windows\Shell\Bags</pre>
+    <p>Shellbags are user-specific — <code>C:\Users\Ahmed\NTUSER.DAT</code> shows what Ahmed browsed, not another user.</p>
+    <p><strong>Tool:</strong> Shellbag Explorer (Eric Zimmerman)</p>
+
+    <h3>3.3 What they tell you</h3>
+    <p>After identifying drive letter <code>E:</code> from Event ID 142, Shellbag Explorer might show:</p>
+    <pre>E:
+ └── Secret_Project_LD</pre>
+    <p>This proves the user <strong>actively navigated into that folder</strong> — not just that the drive existed.</p>
+
+    <h3>3.4 Key limitation</h3>
+    <div class="callout">Shellbags prove <strong>folder access</strong>, not file access. For file-level proof you need Jump Lists, LNK files, or Office MRUs.</div>
+
+    <h3>3.5 ZIP files — a lesser-known capability</h3>
+    <p>Windows treats ZIPs opened in Explorer as folders. If a user browsed inside <code>E:\Archive.zip</code>, Shellbags records:</p>
+    <pre>E:\Archive.zip
+ └── Financial_Reports</pre>
+    <p>This can expose the contents of an archive that was later deleted — as long as the user navigated it through Explorer.</p>
+
+    <h2><span class="num">04</span>Jump Lists</h2>
+
+    <h3>4.1 What they are</h3>
+    <p>Introduced in Windows 7, present through Windows 11. When a user opens a file with any application, Windows records it per-application. The "Recent Files" list you see when right-clicking apps on the Taskbar comes directly from Jump Lists.</p>
+
+    <h3>4.2 Why they matter</h3>
+    <p>Shellbags = folder browsed. Jump Lists = <strong>file opened</strong>. Survives drive removal, file deletion, and application uninstallation.</p>
+
+    <h3>4.3 Locations</h3>
+    <pre>AutomaticDestinations: C:\Users\&lt;User&gt;\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations
+CustomDestinations:    C:\Users\&lt;User&gt;\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations</pre>
+    <p>Files are named by <strong>AppID</strong> (e.g. <code>9b9cdc69c1c24e2b.automaticDestinations-ms</code>) — each ID maps to a specific application.</p>
+    <p><strong>Tool:</strong> JumpList Explorer (Eric Zimmerman)</p>
+
+    <h3>4.4 What they expose</h3>
+    <p>From a single entry you get: full file path, application used, access timestamp, and sometimes open count.</p>
+    <p><strong>Example:</strong> following up on the Shellbag finding (<code>E:\Secret_Project_LD</code>), JumpList Explorer reveals:</p>
+    <pre>Path:        E:\Secret_Project_LD\Dumped_Passwords.txt
+Application: Notepad.exe
+Access Time: 2023-10-23 08:07:14</pre>
+
+    <h2><span class="num">05</span>Artifact summary</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Artifact</th><th>What it proves</th></tr>
+      <tr><td>USBSTOR</td><td>Device was present; vendor, product, serial</td></tr>
+      <tr><td>Event ID 1006</td><td>Hardware details at connection time</td></tr>
+      <tr><td>Event IDs 400 / 410</td><td>Device configured; Class GUID for correlation</td></tr>
+      <tr><td>Event ID 142</td><td>Drive letter assigned</td></tr>
+      <tr><td>Shellbags</td><td>User navigated into a specific folder</td></tr>
+      <tr><td>Jump Lists</td><td>User opened a specific file with a specific app</td></tr>
+    </table>
+    </div>
+
+    <h2><span class="num">06</span>Complete investigation timeline</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Time</th><th>Evidence</th></tr>
+      <tr><td>08:05</td><td>USB connected — SanDisk Cruzer Blade, serial <code>4C530001230101117123</code> (USBSTOR + Event 1006)</td></tr>
+      <tr><td>08:05</td><td>Drive letter assigned: <code>E:</code> (NTFS Event 142)</td></tr>
+      <tr><td>08:06</td><td>User browsed <code>E:\Secret_Project_LD</code> (Shellbags)</td></tr>
+      <tr><td>08:07</td><td>User opened <code>Dumped_Passwords.txt</code> with Notepad (Jump Lists)</td></tr>
+      <tr><td>08:10</td><td>USB removed (Registry value 0066)</td></tr>
+    </table>
+    </div>
+    <p>This transforms the investigation conclusion from:</p>
+    <pre>A USB flash drive was connected to the machine.</pre>
+    <p>into:</p>
+    <pre>At 08:07, the user opened Dumped_Passwords.txt from a SanDisk Cruzer Blade
+(serial: 4C530001230101117123, drive E:) using Notepad — 2 minutes after connecting the drive.</pre>
+    <div class="callout">That level of specificity is what DFIR, Insider Threat, and Data Exfiltration cases require.</div>
+
+    <div class="series-nav">
+      <span></span>
+      <a href="/writeups.html">All writeups →</a>
+    </div>
+  </article>
+</main>
+
+<footer>© 2026 Ahmed Mohamed Reyad — All rights reserved</footer>
+
+<script>
+(function(){
+  var fx = document.createElement('div');
+  fx.className = 'bg-fx';
+  fx.innerHTML = '<div class="grid"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><div class="scan"></div>';
+  document.body.insertBefore(fx, document.body.firstChild);
+})();
+
+(function(){
+  var API = '/api/likes';
+  var widget = document.querySelector('.like-widget');
+  if(!widget) return;
+  var pageSlug = widget.dataset.page;
+  var btn = document.getElementById('likeBtn');
+  var countEl = document.getElementById('likeCount');
+  var namesEl = document.getElementById('likeNames');
+  var form = document.getElementById('likeForm');
+  var nameInput = document.getElementById('likeNameInput');
+  var cancelBtn = document.getElementById('likeCancel');
+
+  function getVisitorId(){
+    var id = localStorage.getItem('0xreyad_visitor_id');
+    if(!id){
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('v-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      localStorage.setItem('0xreyad_visitor_id', id);
+    }
+    return id;
+  }
+
+  function likedKey(){ return '0xreyad_liked_' + pageSlug; }
+
+  function renderNames(names){
+    if(!names || !names.length){ namesEl.textContent = ''; return; }
+    var shown = names.slice(-6).reverse();
+    var text = 'Liked by ' + shown.join(', ');
+    if(names.length > shown.length){ text += ' and ' + (names.length - shown.length) + ' more'; }
+    namesEl.textContent = text;
+  }
+
+  function setLikedState(isLiked){
+    btn.setAttribute('aria-pressed', isLiked ? 'true' : 'false');
+    btn.classList.toggle('liked', isLiked);
+    btn.querySelector('.heart').textContent = isLiked ? '♥' : '♡';
+    btn.querySelector('.like-label').textContent = isLiked ? 'Liked' : 'Like';
+  }
+
+  function load(){
+    fetch(API + '?page=' + encodeURIComponent(pageSlug))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+      })
+      .catch(function(){});
+    if(localStorage.getItem(likedKey())){ setLikedState(true); }
+  }
+
+  btn.addEventListener('click', function(){
+    if(localStorage.getItem(likedKey())) return;
+    widget.classList.add('composing');
+    form.hidden = false;
+    nameInput.focus();
+  });
+
+  cancelBtn.addEventListener('click', function(){
+    widget.classList.remove('composing');
+    form.hidden = true;
+    nameInput.value = '';
+  });
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var name = nameInput.value.trim();
+    if(!name) return;
+    var visitorId = getVisitorId();
+    var submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    fetch(API, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ page: pageSlug, name: name, visitorId: visitorId })
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        countEl.textContent = data.count || 0;
+        renderNames(data.names);
+        localStorage.setItem(likedKey(), '1');
+        setLikedState(true);
+        widget.classList.remove('composing');
+        form.hidden = true;
+      })
+      .catch(function(){
+        alert('Could not save your like right now — please try again.');
+      })
+      .finally(function(){
+        submitBtn.disabled = false;
+      });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
